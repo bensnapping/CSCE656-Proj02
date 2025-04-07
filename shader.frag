@@ -6,6 +6,8 @@ uniform float u_time;
 uniform vec2 u_resolution;
 uniform vec2 u_mouse;
 
+float g_seed = 0.0;
+
 //
 // Base object types
 //
@@ -35,38 +37,44 @@ struct disk{
 	vec3 color;
 };
 
+struct hittable{
+	// enum of what type of object this is
+	// 0: sphere
+	// 1: disk
+	// 2: point_light
+	int type;
+
+	vec3 center;
+	vec3 normal;
+
+	float radius;
+
+	vec3 color;
+};
+
 //
 // Utilities
 //
 
 // random for point
 // https://stackoverflow.com/a/10625698
-float random(vec2 p){
+float random(vec2 pos){
     vec2 K1 = vec2(
         23.14069263277926, // e^pi (Gelfond's constant)
          2.665144142690225 // 2^sqrt(2) (Gelfondâ€“Schneider constant)
     );
-    return fract( cos( dot(p,K1) ) * 12345.6789 );
+    return fract( cos( dot(pos,K1) ) * 12345.6789 );
 }
 
-float linear_congruential_generator(float prev){
-	float modulus = 100.0;
-	float multiplier = 13.0;
-	float increment = 2.0;
-	return mod(multiplier * prev + increment, modulus);
-}
-
-float rand_sequence(int n){
-	float seed = 123.0;
-	float cur = seed;
-	int i = 0;
-	for(int i = 0; i < 100; i++){
-		cur = linear_congruential_generator(cur);
-		if(i >= n){
-			break;
-		}
-	}
-	return cur;
+vec2 hash_vec2(vec2 pos){
+    vec2 K1 = vec2(
+        23.14069263277926, // e^pi (Gelfond's constant)
+         2.665144142690225 // 2^sqrt(2) (Gelfondâ€“Schneider constant)
+    );
+	return vec2(
+				fract( cos( dot(pos,K1) ) * 12345.6789 ),
+				fract( cos( dot(pos,K1) ) * 34567.8912 )
+			);
 }
 
 vec3 hash_vec3(vec2 pos){
@@ -109,7 +117,7 @@ vec3 pos_along_ray(ray r, float t){
 // Intersection Functions
 //
 
-float intersect_sphere(sphere obj, ray r){
+float intersect_sphere(hittable obj, ray r){
 	vec3 oc = obj.center - r.origin;
 	float a = dot(r.dir, r.dir);
     float b = -2.0 * dot(r.dir, oc);
@@ -126,7 +134,7 @@ float intersect_sphere(sphere obj, ray r){
 	}
 }
 
-float intersect_disk(disk obj, ray r){
+float intersect_disk(hittable obj, ray r){
 	float denom = dot(obj.normal, r.dir);
 
 	// if the ray isn't parallel the plane
@@ -147,15 +155,18 @@ float intersect_disk(disk obj, ray r){
 	}
 }
 
-void mainImage(out vec4 fragColor, in vec2 fragCoord)
+void mainImage(out vec4 frag_color, in vec2 frag_coord)
 {
-    // Normalized pixel coordinates (from 0 to 1)
-    vec2 uv = fragCoord / u_resolution.xy;
+	// random seed
+	g_seed = float(random(frag_coord))/float(0xffffffff)+u_time;
+    
+	// Normalized pixel coordinates (from 0 to 1)
+    vec2 uv = frag_coord / u_resolution.xy;
 	vec2 mouse_uv = u_mouse / u_resolution.xy;
 	
 	// Map the coordinates to have square pixels
 	float smaller_side = min(u_resolution.x, u_resolution.y);
-	vec2 mapped_coords = fragCoord / smaller_side;
+	vec2 mapped_coords = frag_coord / smaller_side;
 	vec2 mapped_res = u_resolution / smaller_side;
 	vec2 mouse_mapped = u_mouse / smaller_side;
 
@@ -185,9 +196,10 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
 					),
 					3.0							// focal length
 				);
-	
+	//
 	// direction to each pixel from the camera
-	
+	//
+
 	// The direction to the current pixel
     vec3 pixel_dir = (
 				(cam.transform.dir * cam.focal_length) + 
@@ -199,53 +211,66 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
 			);
 
 	// Background gradient
-	vec4 top_col = vec4(0.3, 0.3, 0.7, 1.0);
-	vec4 bot_col = vec4(0.8, 0.8, 1.0, 1.0);
+	// vec4 top_col = vec4(0.3, 0.3, 0.7, 1.0);
+	// vec4 bot_col = vec4(0.8, 0.8, 1.0, 1.0);
+	vec4 bot_col = vec4(vec3(0.05), 1.0);
+	vec4 top_col = vec4(vec3(0.3), 1.0);
 	vec4 gradient = color_mix(bot_col, top_col, 0.5 + (pixel_ray.dir.y * 0.5));
 
 	// Define the scene
 	
-	#define num_spheres 30
-	sphere spheres[num_spheres];
+	#define num_objs 30
+	hittable objs[num_objs];
 
-	spheres[0] = sphere(
-				vec3(0.0, -100.0, 0.0),
-				100.0,
-				vec3(0.9, 0.9, 0.9)
+	objs[0] = hittable(
+				0,						// type: sphere
+				vec3(0.0, -100.0, 0.0),	// center
+				vec3(0.0, 0.0, 0.0),	// normal
+				100.0,					// radius
+				vec3(0.9, 0.9, 0.9)		// color
 			);
-	spheres[1] = sphere(
+	objs[1] = hittable(
+				0,
 				vec3(0.0, 1.0, 0.0),
+				vec3(0.0, 0.0, 0.0),
 				3.0,
 				vec3(0.9, 0.9, 0.9)
 			);
-	spheres[2] = sphere(							// mouse-tracker sphere
-				vec3((mouse_mapped.x*2.0-1.0)*20.0,
-					(mouse_mapped.y*2.0-1.0)*20.0,
+	objs[2] = hittable(							// mouse-tracker sphere
+				2,
+				vec3((mouse_mapped.x*2.0-1.0)*10.0,
+					(mouse_mapped.y*2.0-1.0)*12.0,
 					5.0),
+				vec3(0.0, 0.0, 0.0),
 				2.0,
 				vec3(1.0, 0.0, 0.0)
 			);
-	// spheres[3] = sphere(							// light sphere
-	// 			vec3(10.0, 10.0, 0.0),
-	// 			3.0,
-	// 			vec3(1.0, 1.0, 1.0)
-	// 		);
 
-	for(int i = 4; i < num_spheres; i++){
+	for(int i = 4; i < num_objs; i++){
 		vec3 rand_pos = hash_vec3(vec2(i, i))*45.0-22.0;
-		spheres[i] = sphere(
+		vec3 rand_norm = hash_vec3(vec2(i*10, i*5))*45.0-22.0;
+
+		//int rand_type = int(random(vec2(i, i+1))*1.0);
+		//if(rand_type > 1){ rand_type == 1; }
+		int rand_type = 0;
+
+		objs[i] = hittable(
+					rand_type,
 					vec3(rand_pos.x, rand_pos.y/10.0 + 2.0, rand_pos.z),
-					random(vec2(i+1, i+1))*2.0+1.0,
-					hash_vec3(vec2(i+2, i+2))
+					vec3(rand_norm.x, rand_norm.y, rand_norm.z),
+					random(vec2(i+1, i+2))*2.0+1.0,
+					hash_vec3(vec2(i+3, i+4))
 				);
 	}
 
+	//
     // Handle intersections
 	//
 	
-	fragColor = gradient;
+	frag_color = gradient;
 
-	// handle bounces in a for loop	
+	// handle bounces in a for loop because the current toolchain
+	// doesn't support recursion in functions	
 	ray cur_ray = pixel_ray;
 	vec3 total_color = vec3(0.0, 0.0, 0.0);
 	
@@ -257,47 +282,105 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
 			vec3 min_hit_normal = vec3(0.0);
 			vec3 min_hit_color = gradient.xyz;
 			vec3 min_hit_reflect = vec3(0.0);
-			for(int i = 0; i < num_spheres; i++){
+			int min_hit_type = -1;
+			for(int i = 0; i < num_objs; i++){
 				// t: the position along a ray where it intersected
 				// 		with an object
-				float t = intersect_sphere(spheres[i], cur_ray);
+				
+				float t = 0.0;
+				if(objs[i].type == 0 || objs[i].type == 2){
+					t = intersect_sphere(objs[i], cur_ray);
+				} else if(objs[i].type == 1){
+					t = intersect_disk(objs[i], cur_ray);
+				}
 				if(t > 0.0001){
 					hit = true;
 					if(t < min_t){
+
+						// get hit information
+						
 						min_t = t;
 						min_hit_location = pos_along_ray(cur_ray, t);
-						min_hit_normal = min_hit_location - spheres[i].center;
-						min_hit_color = spheres[i].color;
+						min_hit_color = objs[i].color;
+						min_hit_type = objs[i].type;
+						
+						if(objs[i].type == 0 || objs[i].type == 2){
+							min_hit_normal = min_hit_location - objs[i].center;
+						} else if(objs[i].type == 1){
+							min_hit_normal = objs[i].normal;
+						}
+						
 						min_hit_reflect = cur_ray.dir - 2.0*dot(cur_ray.dir, min_hit_normal)*min_hit_normal;
 					}
 				}
 			}
-			cur_ray = ray(
-						min_hit_location,
-						0.005*min_hit_normal +
-							random_on_hemisphere(
-									min_hit_normal,
-									vec2(uv.x + float(rand), uv.y+float(rand))
-									//(fragCoord.x*fragCoord.y)+float(rand) // random seed
-									// random(fragCoord)+float(rand)
-								)
-					);
+
+			//
+			// determine a new direction for the bouncing ray
+			//
+
+			// check if there is a light somewhere in the direction
+			// that it COULD bounce
+			bool could_see_light = false;
+			vec3 possible_light_dir = vec3(0.0);
+			for(int obj = 0; obj < num_objs; obj++){
+				if(objs[obj].type == 2){
+					vec3 dir_to_light = objs[obj].center - min_hit_location;
+					if(dot(dir_to_light, min_hit_normal) > 0.0){
+						could_see_light = true;
+						possible_light_dir = dir_to_light;
+
+					}
+				}
+			}
 			
+			if(could_see_light && bounce == 0){
+			//if(false){
+				cur_ray = ray(
+							min_hit_location,
+							normalize(
+									0.005*possible_light_dir +
+									random_on_hemisphere(
+										min_hit_normal,
+										vec2(g_seed + float(rand), g_seed+float(rand))
+									)
+								)
+						);
+
+			} else{
+				cur_ray = ray(
+							min_hit_location,
+							0.005*min_hit_normal +
+								random_on_hemisphere(
+										min_hit_normal,
+										vec2(g_seed + float(rand), g_seed+float(rand))
+									)
+						);
+			}
+			
+			// the light calculations per bounce
 			if(bounce == 0){
-				if(min_hit_color.x+min_hit_color.y+min_hit_color.z >= 2.9){
+				// handling lights
+				if(min_hit_type == 2){
 					hit = false;
 				}
 				total_color = min_hit_color;
 				break;
-			} else{	
-				total_color *= 0.7;
-				total_color += (0.2 * min_hit_color);
-				if(min_hit_color.x+min_hit_color.y+min_hit_color.z >= 2.9){
-					total_color = min_hit_color*2.0;
+			} else{
+
+				if (min_hit_type == 2){
+					total_color = (0.3*total_color) + (min_hit_color);
+					break;
+
+				} else{
+					total_color = total_color;
+					total_color *= 0.7;
+					total_color += (0.2 * min_hit_color);
 				}
 			}
 
 			if(min_t == 1000.0){
+				total_color = vec3(0.01) + 0.2*(total_color);
 				break;
 			}
 		}
@@ -308,11 +391,8 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord)
 	}
 
 	if(total_color != vec3(0.0)){
-		fragColor = vec4(total_color, 1.0);
+		frag_color = vec4(total_color, 1.0);
 	}
-	
-	//float i = random(uv);
-	//fragColor = vec4(vec3(i), 1.0);
 }
 
 void main() {
