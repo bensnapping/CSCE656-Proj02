@@ -6,6 +6,10 @@ uniform float u_time;
 uniform vec2 u_resolution;
 uniform vec2 u_mouse;
 
+#define num_objs 20
+#define num_samples 10
+#define num_bounces 5
+#define check_num 0.01
 float g_seed = 0.0;
 
 //
@@ -48,6 +52,17 @@ struct hittable{
 	vec3 normal;
 
 	float radius;
+
+	vec3 color;
+};
+
+struct hit{
+	float dist;
+	int type;
+
+	vec3 pos;
+	vec3 norm;
+	vec3 ref;
 
 	vec3 color;
 };
@@ -155,6 +170,54 @@ float intersect_disk(hittable obj, ray r){
 	}
 }
 
+hit intersect_world(ray r, hittable objs[num_objs]){
+
+	bool hit_something = false;
+	hit min_hit = hit(
+				1000.0,			// dist (t)
+				-1,				// type
+				vec3(0.0),		// location
+				vec3(0.0),		// normal
+				vec3(0.0),		// reflect
+				vec3(0.0)		// color
+			);
+
+	for(int obj = 0; obj < num_objs; obj++){
+		
+		float t = 0.0;
+		if(objs[obj].type == 0 || objs[obj].type == 2){
+			t = intersect_sphere(objs[obj], r);
+		} else if(objs[obj].type == 1){
+			t = intersect_disk(objs[obj], r);
+		}
+		if(t > 0.0001){
+			hit_something = true;
+			
+			if(t < min_hit.dist){
+				min_hit.dist = t;
+				min_hit.pos = pos_along_ray(r, t);
+				min_hit.color = objs[obj].color;
+				min_hit.type = objs[obj].type;
+				
+				if(objs[obj].type == 0 || objs[obj].type == 2){
+					min_hit.norm = min_hit.pos - objs[obj].center;
+				} else if(objs[obj].type == 1){
+					min_hit.norm = objs[obj].normal;
+				}
+				
+				min_hit.ref = r.dir - 2.0*dot(r.dir, min_hit.norm)*min_hit.norm;
+			}
+		}
+	}
+
+	if(!hit_something){
+		min_hit.dist = -1.0;;
+	}
+	
+	return min_hit;
+}
+
+
 void mainImage(out vec4 frag_color, in vec2 frag_coord)
 {
 	// random seed
@@ -219,40 +282,69 @@ void mainImage(out vec4 frag_color, in vec2 frag_coord)
 
 	// Define the scene
 	
-	#define num_objs 30
 	hittable objs[num_objs];
 
+	#define wall_size 50.0
+
 	objs[0] = hittable(
-				0,						// type: sphere
-				vec3(0.0, -100.0, 0.0),	// center
-				vec3(0.0, 0.0, 0.0),	// normal
-				100.0,					// radius
-				vec3(0.9, 0.9, 0.9)		// color
-			);
-	objs[1] = hittable(
 				0,
 				vec3(0.0, 1.0, 0.0),
 				vec3(0.0, 0.0, 0.0),
 				3.0,
 				vec3(0.9, 0.9, 0.9)
 			);
-	objs[2] = hittable(							// mouse-tracker sphere
+	objs[1] = hittable(							// mouse-tracker sphere
 				2,
 				vec3((mouse_mapped.x*2.0-1.0)*10.0,
 					(mouse_mapped.y*2.0-1.0)*12.0,
 					5.0),
 				vec3(0.0, 0.0, 0.0),
 				2.0,
-				vec3(1.0, 0.0, 0.0)
+				vec3(1.0, 1.0, 1.0)
+			);
+	objs[2] = hittable(					// floor
+				1,						// type: disk
+				vec3(0.0, -2.0, 0.0),	// center
+				vec3(0.0, 1.0, 0.0),	// normal
+				wall_size,					// radius
+				vec3(0.9, 0.9, 0.9)		// color
+			);
+	objs[3] = hittable(					// left wall
+				1,						// type: disk
+				vec3(-20.0, 0.0, 0.0),	// center
+				vec3(1.0, 0.0, 0.0),	// normal
+				wall_size,					// radius
+				vec3(1.0, 0.0, 0.0)		// color
+			);
+	// objs[4] = hittable(					// back wall
+	// 			1,						// type: disk
+	// 			vec3(0.0, 0.0, -20.0),	// center
+	// 			vec3(0.0, 0.0, 1.0),	// normal
+	// 			wall_size,					// radius
+	// 			vec3(0.9, 0.9, 0.9)		// color
+	// 		);
+	objs[5] = hittable(					// right wall
+				1,						// type: disk
+				vec3(20.0, 0.0, 0.0),	// center
+				vec3(-1.0, 0.0, 0.0),	// normal
+				wall_size,					// radius
+				vec3(0.0, 1.0, 0.0)		// color
+			);
+	objs[6] = hittable(					// ceiling
+				1,						// type: disk
+				vec3(0.0, 10.0, 0.0),	// center
+				vec3(0.0, -1.0, 0.0),	// normal
+				wall_size,					// radius
+				vec3(0.9, 0.9, 0.9)		// color
 			);
 
-	for(int i = 4; i < num_objs; i++){
-		vec3 rand_pos = hash_vec3(vec2(i, i))*45.0-22.0;
-		vec3 rand_norm = hash_vec3(vec2(i*10, i*5))*45.0-22.0;
+	for(int i = 7; i < num_objs; i++){
+		vec3 rand_pos = hash_vec3(vec2(i+1, i+2)) * 30.0 - 15.0;
+		vec3 rand_norm = hash_vec3(vec2(i*10, i*5)) * 45.0 - 22.0;
 
-		//int rand_type = int(random(vec2(i, i+1))*1.0);
-		//if(rand_type > 1){ rand_type == 1; }
-		int rand_type = 0;
+		int rand_type = int(random(vec2(i, i+1))*2.2);
+		if(rand_type > 2){ rand_type == 2; }
+		//int rand_type = 0;
 
 		objs[i] = hittable(
 					rand_type,
@@ -266,133 +358,77 @@ void mainImage(out vec4 frag_color, in vec2 frag_coord)
 	//
     // Handle intersections
 	//
-	
-	frag_color = gradient;
 
 	// handle bounces in a for loop because the current toolchain
 	// doesn't support recursion in functions	
-	ray cur_ray = pixel_ray;
-	vec3 total_color = vec3(0.0, 0.0, 0.0);
-	
-	for(int bounce = 0; bounce < 2; bounce++){
-		bool hit = false;
-		for(int rand = 0; rand < 100; rand++){
-			float min_t = 1000.0;
-			vec3 min_hit_location = vec3(0.0);
-			vec3 min_hit_normal = vec3(0.0);
-			vec3 min_hit_color = gradient.xyz;
-			vec3 min_hit_reflect = vec3(0.0);
-			int min_hit_type = -1;
-			for(int i = 0; i < num_objs; i++){
-				// t: the position along a ray where it intersected
-				// 		with an object
-				
-				float t = 0.0;
-				if(objs[i].type == 0 || objs[i].type == 2){
-					t = intersect_sphere(objs[i], cur_ray);
-				} else if(objs[i].type == 1){
-					t = intersect_disk(objs[i], cur_ray);
-				}
-				if(t > 0.0001){
-					hit = true;
-					if(t < min_t){
+	vec3 total_color = vec3(0.0);
 
-						// get hit information
-						
-						min_t = t;
-						min_hit_location = pos_along_ray(cur_ray, t);
-						min_hit_color = objs[i].color;
-						min_hit_type = objs[i].type;
-						
-						if(objs[i].type == 0 || objs[i].type == 2){
-							min_hit_normal = min_hit_location - objs[i].center;
-						} else if(objs[i].type == 1){
-							min_hit_normal = objs[i].normal;
-						}
-						
-						min_hit_reflect = cur_ray.dir - 2.0*dot(cur_ray.dir, min_hit_normal)*min_hit_normal;
-					}
+	for(int rand = 0; rand < num_samples; rand++){
+		vec3 sample_color = vec3(0.0);
+		ray cur_ray = pixel_ray;
+		for(int bounce = 0; bounce < num_bounces; bounce++){
+			hit ray_hit = intersect_world(cur_ray, objs);
+
+			//
+			// handle lighting/color
+			//
+
+			// if we hit an object, add the color
+			if(ray_hit.dist > 0.0){
+				if(ray_hit.type == 2){
+					sample_color += ray_hit.color;
+					break;
+				} else{
+					sample_color *= (0.001);
+					sample_color += ((1.0/float(bounce+3)) * ray_hit.color);
+					//sample_color += (0.1 * ray_hit.color);
 				}
+
+			// else add background color and break
+			} else{
+				break;
 			}
-
+			
 			//
-			// determine a new direction for the bouncing ray
+			// change cur_ray for the next bounce
 			//
-
-			// check if there is a light somewhere in the direction
-			// that it COULD bounce
-			bool could_see_light = false;
-			vec3 possible_light_dir = vec3(0.0);
+			
+			// check if light could be found from a bounce
+			vec3 light_dir = vec3(0.0);
 			for(int obj = 0; obj < num_objs; obj++){
 				if(objs[obj].type == 2){
-					vec3 dir_to_light = objs[obj].center - min_hit_location;
-					if(dot(dir_to_light, min_hit_normal) > 0.0){
-						could_see_light = true;
-						possible_light_dir = dir_to_light;
+					ray potential_ray = ray(ray_hit.pos, objs[obj].center - ray_hit.pos);
+					hit light_hit = intersect_world(potential_ray, objs);
 
+					if(light_hit.type == 2){
+						light_dir = potential_ray.dir;
 					}
 				}
 			}
-			
-			if(could_see_light && bounce == 0){
-			//if(false){
-				cur_ray = ray(
-							min_hit_location,
-							normalize(
-									0.005*possible_light_dir +
-									random_on_hemisphere(
-										min_hit_normal,
-										vec2(g_seed + float(rand), g_seed+float(rand))
-									)
-								)
-						);
 
-			} else{
-				cur_ray = ray(
-							min_hit_location,
-							0.005*min_hit_normal +
-								random_on_hemisphere(
-										min_hit_normal,
-										vec2(g_seed + float(rand), g_seed+float(rand))
-									)
-						);
-			}
-			
-			// the light calculations per bounce
-			if(bounce == 0){
-				// handling lights
-				if(min_hit_type == 2){
-					hit = false;
-				}
-				total_color = min_hit_color;
-				break;
-			} else{
-
-				if (min_hit_type == 2){
-					total_color = (0.3*total_color) + (min_hit_color);
-					break;
-
-				} else{
-					total_color = total_color;
-					total_color *= 0.7;
-					total_color += (0.2 * min_hit_color);
-				}
-			}
-
-			if(min_t == 1000.0){
-				total_color = vec3(0.01) + 0.2*(total_color);
-				break;
-			}
+			cur_ray = ray(
+				ray_hit.pos,
+				0.005*ray_hit.norm +
+					random_on_hemisphere(
+							ray_hit.norm,
+							vec2(uv.x + float(rand)*g_seed, uv.y+float(rand+1)*g_seed)
+						)
+			);
 		}
-		if(!hit){
-			break;
+		
+		if(sample_color != vec3(0.0)){
+			total_color += sample_color;
 		}
-
 	}
 
-	if(total_color != vec3(0.0)){
-		frag_color = vec4(total_color, 1.0);
+
+	if(total_color == vec3(0.0)){
+		total_color = gradient.xyz;
+	} else{
+		total_color /= float(num_samples);
 	}
+	
+	frag_color = vec4(total_color, 1.0);
 }
 
 void main() {
